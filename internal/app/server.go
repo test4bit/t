@@ -86,12 +86,12 @@ func StartServer(opts ServerOptions, shutdownCh <-chan struct{}) error {
 	}
 
 	if opts.Mode == "warp" {
-		return runWarpMode(clientIF, shutdownCh, ready)
+		return runWarpMode(clientIF, shutdownCh, ready, stopPunch)
 	}
-	return runHostMode(clientIF, shutdownCh, ready)
+	return runHostMode(clientIF, shutdownCh, ready, stopPunch)
 }
 
-func runWarpMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{}, ready func() error) error {
+func runWarpMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{}, ready func() error, stopPunch func()) error {
 	if err := network.EnsureNetNS(config.NSName); err != nil {
 		return fmt.Errorf("ensure server netns: %w", err)
 	}
@@ -107,6 +107,11 @@ func runWarpMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{},
 		return fmt.Errorf("start client VPN in netns: %w", err)
 	}
 	defer wgDev.Close()
+	stopMonitor, err := network.StopPunchAfterHandshake(wgDev, clientIF.PeerPubKey, stopPunch)
+	if err != nil {
+		return fmt.Errorf("start handshake monitor: %w", err)
+	}
+	defer stopMonitor()
 
 	warpReg, err := cf.RegisterWarp(shutdownCh)
 	if err != nil {
@@ -170,7 +175,7 @@ func runWarpMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{},
 	return nil
 }
 
-func runHostMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{}, ready func() error) error {
+func runHostMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{}, ready func() error, stopPunch func()) error {
 	outIface, err := network.GetDefaultOutboundInterface()
 	if err != nil {
 		log.Printf("warning: determine outbound interface: %v", err)
@@ -183,6 +188,11 @@ func runHostMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{},
 		return fmt.Errorf("start VPN in host: %w", err)
 	}
 	defer wgDev.Close()
+	stopMonitor, err := network.StopPunchAfterHandshake(wgDev, clientIF.PeerPubKey, stopPunch)
+	if err != nil {
+		return fmt.Errorf("start handshake monitor: %w", err)
+	}
+	defer stopMonitor()
 
 	if err := network.SetupNftablesHost(outIface); err != nil {
 		log.Printf("warning: setup nftables on host: %v", err)

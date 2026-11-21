@@ -17,6 +17,13 @@ import (
 // SO_REUSEPORT listener, a raw sending socket cannot steal WireGuard packets.
 // The source port matches the AWG listener; the loop keeps NAT filtering open.
 func StartNATPuncher(localPort int, targetIP string, targetPort, ttl int) (func(), error) {
+	return startNATPuncher(localPort, targetIP, targetPort, ttl, 25*time.Second)
+}
+
+func startNATPuncher(localPort int, targetIP string, targetPort, ttl int, interval time.Duration) (func(), error) {
+	if interval <= 0 {
+		return nil, fmt.Errorf("invalid NAT punch interval")
+	}
 	ip := net.ParseIP(targetIP).To4()
 	if ip == nil || localPort < 1 || localPort > 65535 || targetPort < 1 || targetPort > 65535 || ttl < 1 || ttl > 255 {
 		return nil, fmt.Errorf("invalid NAT punch parameters")
@@ -47,7 +54,7 @@ func StartNATPuncher(localPort int, targetIP string, targetPort, ttl int) (func(
 	var once sync.Once
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(25 * time.Second)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {

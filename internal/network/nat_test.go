@@ -80,3 +80,30 @@ func TestRawPunchPortAndCoexistence(t *testing.T) {
 	}
 	listener.Close()
 }
+
+// With root/CAP_NET_RAW this checks the actual raw sender, including shutdown.
+func TestRawPunchStops(t *testing.T) {
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	stop, err := startNATPuncher(45322, "127.0.0.1", c.LocalAddr().(*net.UDPAddr).Port, 4, 100*time.Millisecond)
+	if err != nil {
+		t.Skipf("raw socket unavailable: %v", err)
+	}
+	buf := make([]byte, 32)
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := c.ReadFromUDP(buf); err != nil {
+		stop()
+		t.Fatal(err)
+	}
+	stop()
+	stop()
+	c.SetReadDeadline(time.Now().Add(350 * time.Millisecond))
+	if _, _, err := c.ReadFromUDP(buf); err == nil {
+		t.Fatal("packet after stop")
+	} else if nerr, ok := err.(net.Error); !ok || !nerr.Timeout() {
+		t.Fatal(err)
+	}
+}
