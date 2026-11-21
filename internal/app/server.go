@@ -35,37 +35,44 @@ func StartServer(opts ServerOptions, shutdownCh <-chan struct{}) error {
 		return fmt.Errorf("read gist: %w", err)
 	}
 
-	// Optional NAT diagnostics: differing mapped ports indicate a NAT that
-	// cannot be reliably reached using a single STUN-discovered endpoint.
-	if os.Getenv("VPN_DEBUG_STUN") == "1" {
-		for _, endpoint := range config.STUNServers {
-			ip, port, e := network.GetExternalIPAndPort(config.ServerLPort, []string{endpoint})
-			if e != nil {
-				log.Printf("STUN diagnostic %s failed: %v", endpoint, e)
-			} else {
-				log.Printf("STUN diagnostic %s mapped to %s:%d", endpoint, ip, port)
-			}
-		}
-	}
-	sIP, sPort, err := network.GetExternalIPAndPort(config.ServerLPort, config.STUNServers)
+	// Compare destinations on the same live UDP socket; separate socket
+	// lifetimes do not constitute a valid NAT mapping test.
+	mappings, err := network.ProbeSTUNMappings(config.ServerLPort, config.STUNServers)
 	if err != nil {
 		return fmt.Errorf("server STUN: %w", err)
 	}
-
-	privKey, pubKey := network.GenerateWGKeys()
-
-	data.Status = config.StatusServerReady
-	data.ServerIP = sIP
-	data.ServerPort = sPort
-	data.ServerPub = pubKey
-	data.ServerHPK = network.GenerateSymmetricKey()
-
-	if err := ghc.UpdateGist(opts.GistID, data); err != nil {
-		return fmt.Errorf("update gist: %w", err)
+	for _, m := range mappings {
+		log.Printf("STUN mapping %s -> %s:%d", m.Server, m.IP, m.Port)
 	}
+	first := mappings[0]
+	if len(mappings) < 2 {
+		log.Print("warning: only one STUN response; mapping behavior is unknown")
+	} else if mappings[1].IP != first.IP || mappings[1].Port != first.Port {
+		// Fail this runner promptly, allowing the client to dispatch another.
+		// This is a conservative heuristic, not a complete NAT classification.
+		data.Status = config.StatusServerNATIncompatible
+		if err := ghc.UpdateGist(opts.GistID, data); err != nil {
+			return fmt.Errorf("report incompatible runner: %w", err)
+		}
+		return fmt.Errorf("runner has destination-dependent STUN mapping; retry with another runner")
+	}
+	privKey, pubKey := network.GenerateWGKeys()
+	data.ServerIP, data.ServerPort = first.IP, first.Port
+	data.ServerPub, data.ServerHPK = pubKey, network.GenerateSymmetricKey()
 
-	log.Println("Punching Azure NAT...")
-	network.PunchNATOnce(config.ServerLPort, data.ClientIP, data.ClientPort, 4)
+	log.Println("Starting periodic low-TTL NAT punch...")
+	stopPunch, err := network.StartNATPuncher(config.ServerLPort, data.ClientIP, data.ClientPort, 4)
+	if err != nil {
+		return err
+	}
+	defer stopPunch()
+	ready := func() error {
+		data.Status = config.StatusServerReady
+		if err := ghc.UpdateGist(opts.GistID, data); err != nil {
+			return fmt.Errorf("update gist: %w", err)
+		}
+		return nil
+	}
 
 	clientIF := network.WGInterfaceConfig{
 		Name:                config.VPNIface,
@@ -79,12 +86,12 @@ func StartServer(opts ServerOptions, shutdownCh <-chan struct{}) error {
 	}
 
 	if opts.Mode == "warp" {
-		return runWarpMode(clientIF, shutdownCh)
+		return runWarpMode(clientIF, shutdownCh, ready)
 	}
-	return runHostMode(clientIF, shutdownCh)
+	return runHostMode(clientIF, shutdownCh, ready)
 }
 
-func runWarpMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{}) error {
+func runWarpMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{}, ready func() error) error {
 	if err := network.EnsureNetNS(config.NSName); err != nil {
 		return fmt.Errorf("ensure server netns: %w", err)
 	}
@@ -155,12 +162,15 @@ func runWarpMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{})
 		}
 	}
 
+	if err := ready(); err != nil {
+		return err
+	}
 	log.Println("Server active. WARP interface configured (handshake not yet verified).")
 	<-shutdownCh
 	return nil
 }
 
-func runHostMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{}) error {
+func runHostMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{}, ready func() error) error {
 	outIface, err := network.GetDefaultOutboundInterface()
 	if err != nil {
 		log.Printf("warning: determine outbound interface: %v", err)
@@ -178,7 +188,10 @@ func runHostMode(clientIF network.WGInterfaceConfig, shutdownCh <-chan struct{})
 		log.Printf("warning: setup nftables on host: %v", err)
 	}
 
-	log.Println("Server active. Tunnel established.")
+	if err := ready(); err != nil {
+		return err
+	}
+	log.Println("Server active. Interface configured (handshake not yet verified).")
 	<-shutdownCh
 
 	if link, err := netlink.LinkByName(config.VPNIface); err == nil {

@@ -142,15 +142,16 @@ func StartKeepalive(localPort int, sIP string, sPort int) func() {
 	go func() {
 		defer wg.Done()
 		defer conn.Close()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
 		for {
+			if _, err := conn.WriteTo([]byte{0}, addr); err != nil {
+				log.Printf("warning: keepalive write: %v", err)
+			}
 			select {
 			case <-ctx.Done():
 				return
-			default:
-				if _, err := conn.WriteTo([]byte{0}, addr); err != nil {
-					log.Printf("warning: keepalive write: %v", err)
-				}
-				time.Sleep(10 * time.Second)
+			case <-ticker.C:
 			}
 		}
 	}()
@@ -203,4 +204,81 @@ func CheckVPNHealth(nsFd netns.NsHandle) bool {
 		return false
 	}
 	return true
+}
+
+// STUNMapping captures one observation. Comparing different servers is meaningful
+// only while using the same live socket (and during a short measurement window).
+type STUNMapping struct {
+	Server string
+	IP     string
+	Port   int
+}
+
+func ProbeSTUNMappings(port int, servers []string) ([]STUNMapping, error) {
+	lc := net.ListenConfig{Control: func(_, _ string, raw syscall.RawConn) error {
+		var sockErr error
+		if err := raw.Control(func(fd uintptr) {
+			if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
+				sockErr = err
+				return
+			}
+			sockErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
+		}); err != nil {
+			return err
+		}
+		return sockErr
+	}}
+	c, err := lc.ListenPacket(context.Background(), "udp4", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		return nil, fmt.Errorf("STUN socket: %w", err)
+	}
+	defer c.Close()
+	var results []STUNMapping
+	for _, server := range servers {
+		addr, err := net.ResolveUDPAddr("udp4", server)
+		if err != nil {
+			log.Printf("STUN %s: %v", server, err)
+			continue
+		}
+		msg := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+		var found bool
+		for attempt := 0; attempt < 2 && !found; attempt++ {
+			if _, err = c.WriteTo(msg.Raw, addr); err != nil {
+				break
+			}
+			_ = c.SetReadDeadline(time.Now().Add(time.Second))
+			buf := make([]byte, 2048)
+			for {
+				n, src, e := c.ReadFrom(buf)
+				if e != nil {
+					break
+				}
+				udp, ok := src.(*net.UDPAddr)
+				if !ok || !udp.IP.Equal(addr.IP) || udp.Port != addr.Port {
+					continue
+				}
+				response := new(stun.Message)
+				response.Raw = buf[:n]
+				if response.Decode() != nil || response.TransactionID != msg.TransactionID || response.Type != stun.BindingSuccess {
+					continue
+				}
+				var mapped stun.XORMappedAddress
+				if mapped.GetFrom(response) == nil && mapped.IP.To4() != nil {
+					results = append(results, STUNMapping{Server: server, IP: mapped.IP.String(), Port: mapped.Port})
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			log.Printf("STUN %s: no valid response", server)
+		}
+		if len(results) >= 2 {
+			break
+		}
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("all STUN servers failed")
+	}
+	return results, nil
 }

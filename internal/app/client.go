@@ -103,6 +103,10 @@ func StartClient(opts ClientOptions, shutdownCh, rotateCh <-chan struct{}) error
 	serverReady := false
 	for range 60 {
 		data, err := ghc.ReadGist(gistID)
+		if err == nil && data.Status == config.StatusServerNATIncompatible {
+			stopKeepalive()
+			return fmt.Errorf("runner has incompatible NAT mapping; requesting a fresh runner")
+		}
 		if err == nil && data.Status == config.StatusServerReady {
 			sIP = data.ServerIP
 			sPort = data.ServerPort

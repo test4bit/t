@@ -20,8 +20,9 @@ const (
 	KeepaliveTarget = "1.1.1.1:53"
 	HealthTarget    = "1.1.1.1:53"
 
-	StatusServerReady = "server_ready"
-	StatusClientReady = "client_ready"
+	StatusServerReady           = "server_ready"
+	StatusServerNATIncompatible = "server_nat_incompatible"
+	StatusClientReady           = "client_ready"
 )
 
 var STUNServers = []string{

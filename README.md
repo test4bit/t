@@ -25,3 +25,9 @@ Set repository Actions variable `ENABLE_WARP_SCOUT` to `true` to install pinned 
 ## Security and operation
 
 Keep `GH_PAT` in the Actions secret and the client environment, never in source. `RandomTrailers` is enabled on both AWG ends, with equal S1-S4 and a per-run header protection key. `DisableCookies` is enabled only for the client, which removes handshake flood protection there. The separate WARP peer retains plain WireGuard defaults. Client health checks and scheduled rotations may terminate an interrupted session.
+
+## NAT traversal
+
+The server probes two STUN destinations using the same live UDP socket. If they return different mappings, this runner is rejected and the client retries using a new workflow run; this is a conservative heuristic, not a complete NAT classification. If only one STUN server replies, the mapping type remains unknown and the program attempts to connect. The server sends a low-TTL NAT punch every 25 seconds using a Linux raw socket (requires `CAP_NET_RAW`), without binding or competing with the WireGuard UDP listener. The server publishes readiness only after configuring the tunnel and optional SSH controller.
+
+This improves reliability for endpoint-independent NAT like the configuration described by ValdikSS. Direct hole punching still cannot be guaranteed with arbitrary NATs or firewalls; no relay is bundled. Check actual traffic rather than the interface-configuration log. The old `VPN_DEBUG_STUN` setting used different sockets and is no longer used.
