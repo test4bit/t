@@ -35,6 +35,18 @@ func StartServer(opts ServerOptions, shutdownCh <-chan struct{}) error {
 		return fmt.Errorf("read gist: %w", err)
 	}
 
+	// Optional NAT diagnostics: differing mapped ports indicate a NAT that
+	// cannot be reliably reached using a single STUN-discovered endpoint.
+	if os.Getenv("VPN_DEBUG_STUN") == "1" {
+		for _, endpoint := range config.STUNServers {
+			ip, port, e := network.GetExternalIPAndPort(config.ServerLPort, []string{endpoint})
+			if e != nil {
+				log.Printf("STUN diagnostic %s failed: %v", endpoint, e)
+			} else {
+				log.Printf("STUN diagnostic %s mapped to %s:%d", endpoint, ip, port)
+			}
+		}
+	}
 	sIP, sPort, err := network.GetExternalIPAndPort(config.ServerLPort, config.STUNServers)
 	if err != nil {
 		return fmt.Errorf("server STUN: %w", err)

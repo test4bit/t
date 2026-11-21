@@ -157,7 +157,7 @@ func StartClient(opts ClientOptions, shutdownCh, rotateCh <-chan struct{}) error
 	}
 
 	log.Println("=====================================================")
-	log.Println("[+] VPN Connected! Injected into persistent namespace.")
+	log.Println("[+] VPN interface configured in persistent namespace (handshake not yet verified).")
 	log.Println("Run apps with: sudo -E ip netns exec amnezia sudo -E -u user bash")
 	log.Println("=====================================================")
 

@@ -44,6 +44,7 @@ jobs:
           GH_PAT: ${{ secrets.GH_PAT }}
           GIST_ID: ${{ inputs.gist_id }}
           VPN_MODE: ${{ inputs.mode }}
+          VPN_DEBUG_STUN: ${{ vars.VPN_DEBUG_STUN }}
           GH_REPO: ${{ github.repository }}
           WARP_SSH_HOST_KEY: ${{ secrets.WARP_SSH_HOST_KEY }}
           WARP_SSH_PASSWORD: ${{ secrets.WARP_SSH_PASSWORD }}
