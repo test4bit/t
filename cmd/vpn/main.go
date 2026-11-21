@@ -23,7 +23,9 @@ var (
 	rotateClosed bool
 )
 
-func main() {
+func main() { os.Exit(run()) }
+
+func run() int {
 	role := flag.String("role", "client", "Role: client or server")
 	mode := flag.String("mode", "warp", "Mode: awg or warp")
 	repo := flag.String("repo", os.Getenv("GH_REPO"), "GitHub Repo: user/repo")
@@ -40,7 +42,7 @@ func main() {
 	if *role == "client" || (*role == "server" && *mode == "warp") {
 		if err := network.EnsureNetNS(config.NSName); err != nil {
 			log.Printf("Failed to initialize persistent NetNS: %v", err)
-			return
+			return 1
 		}
 	}
 
@@ -49,10 +51,14 @@ func main() {
 	} else {
 		if *gistID == "" {
 			log.Printf("Server error: missing gist_id. Pass via -gist or GIST_ID env var.")
-			return
+			return 1
 		}
-		runServer(*mode, *gistID, *repo)
+		if err := runServer(*mode, *gistID, *repo); err != nil {
+			log.Printf("Fatal error: %v", err)
+			return 1
+		}
 	}
+	return 0
 }
 
 func runClient(mode, repo string) {
@@ -81,13 +87,9 @@ func runClient(mode, repo string) {
 	}
 }
 
-func runServer(mode, gistID, repo string) {
+func runServer(mode, gistID, repo string) error {
 	opts := app.ServerOptions{Mode: mode, GistID: gistID, Repo: repo}
-
-	if err := app.StartServer(opts, shutdownCh); err != nil {
-		log.Printf("Fatal error: %v", err)
-		return
-	}
+	return app.StartServer(opts, shutdownCh)
 }
 
 func setupSignals() {
